@@ -48,10 +48,9 @@ function getUserPath(collection) {
     return `artifacts/${appId}/users/${userId}/${collection}`;
 }
 
-// --- MOCK INITIALIZATION DATA (Replaces old mock data arrays) ---
-// This ensures that when a new user logs in, they see some placeholder data initially
+// --- MOCK INITIALIZATION DATA (For new user enrollment) ---
 const INITIAL_MOCK_COURSES = [
-    { title: 'Data Science Intern Course', progress: 0, completed: false, url: "/courses/courses/Essential Data Science Intern Course.html" },
+    { title: 'Essential Data Science Intern Course', progress: 0, completed: false, url: "/courses/courses/Essential Data Science Intern Course.html" },
     { title: 'Generative AI & Prompt Engineering', progress: 0, completed: false, url: "/courses/courses/Generative-AI-Prompt-Engineering-Masterclass.html" },
     { title: 'Ethical Hacking Mastery', progress: 0, completed: false, url: "/courses/courses/Ethical-Hacking-Mastery.html" }
 ];
@@ -80,12 +79,14 @@ async function initializeUserData(user) {
     }
 
     // Initialize mock courses if none exist
+    // FIX: Only initialize mock data if user has no enrollments yet.
     const coursesPath = getUserPath('enrollments');
     const coursesSnapshot = await db.collection(coursesPath).limit(1).get();
     if (coursesSnapshot.empty) {
         const batch = db.batch();
         INITIAL_MOCK_COURSES.forEach(course => {
             const docRef = db.collection(coursesPath).doc();
+            // Note: We only pre-enroll the user into a few default courses for a good start.
             batch.set(docRef, { ...course, userId: user.uid });
         });
         INITIAL_MOCK_INTERNSHIPS.forEach(internship => {
@@ -98,6 +99,16 @@ async function initializeUserData(user) {
 
 // --- UI Rendering Functions (Now uses Firestore real-time data) ---
 
+// Hardcoded data (used only for lookup for progress rendering)
+const allCourses = [
+    { title: 'Essential Data Science Intern Course', instructor: 'Lucky Kumar', image: '/images/Essential Data Science Intern Course.png', url: "/courses/courses/Essential Data Science Intern Course.html" },
+    { title: 'Generative AI & Prompt Engineering', instructor: 'Lucky Kumar', image: '/images/Generative-AI-Prompt-Engineering-Masterclass.png', url: "/courses/courses/Generative-AI-Prompt-Engineering-Masterclass.html" },
+    { title: 'Ethical Hacking Mastery', instructor: 'Lucky Kumar', image: '/images/Ethical-Hacking-Mastery.png', url: "/courses/courses/Ethical-Hacking-Mastery.html" },
+    { title: 'Python Essentials for All', instructor: 'Lucky Kumar', image: '/images/Python-Essentials-for-All.png', url: "/courses/courses/Python-Essentials-for-All.html" },
+    { title: 'Cloud & DevOps Essentials', instructor: 'Lucky Kumar', image: '/images/Cloud-DevOps-Essentials.png', url: "/courses/courses/Cloud-DevOps-Essentials.html" }
+];
+
+// FIX: This function now correctly shows only courses fetched from Firestore (enrolled courses)
 function renderCourseProgress(coursesData) {
     const coursesListContainer = document.getElementById('coursesListContainer');
     if (!coursesListContainer) return;
@@ -107,7 +118,7 @@ function renderCourseProgress(coursesData) {
     // Check if user is logged in
     const user = auth.currentUser;
     if (!user || user.isAnonymous) {
-         coursesListContainer.innerHTML = '<p class="text-center empty-state" style="padding: 20px 0;">Please log in to view your courses.</p>';
+         coursesListContainer.innerHTML = '<p class="text-center empty-state" style="padding: 20px 0;">Please log in to view your enrolled courses and progress.</p>';
          return;
     }
     
@@ -121,20 +132,22 @@ function renderCourseProgress(coursesData) {
         let statusColor;
         
         // Find the correct URL for the course using a title match fallback if 'url' field is missing from Firestore data
-        const courseDetails = allCourses.find(c => c.title.includes(course.title)) || { url: '/courses/course.html' };
-        const courseUrl = course.url || courseDetails.url; // Prefer Firestore URL, fallback to local lookup
+        const courseDetails = allCourses.find(c => course.title.includes(c.title)) || { url: '/courses/course.html' };
+        // Use the URL saved in Firestore during enrollment or fallback to hardcoded
+        const courseUrl = course.url || courseDetails.url; 
 
         if (course.completed && course.progress >= 99) {
             statusColor = 'var(--success)';
+            // Ensure displayName is used, fallback to email local part
             const nameEncoded = encodeURIComponent(user.displayName || user.email.split('@')[0]);
             const courseNameEncoded = encodeURIComponent(course.title);
             const certificateUrl = `/courses/courses/certificate.html?name=${nameEncoded}&course=${courseNameEncoded}`;
             
-            // POINT 4: Download Certificate Link in My Profile
+            // CORRECT: Download Certificate Link in My Profile 
             buttonHtml = `<a href="${certificateUrl}" target="_blank" class="btn btn-primary animate-pulse" style="padding: 8px 15px; font-size: 14px; background-color: var(--success);">Download Certificate</a>`;
         } else {
             statusColor = course.progress > 0 ? 'var(--warning)' : 'var(--primary)';
-            buttonHtml = `<a href="${courseUrl}" class="btn btn-outline" style="padding: 8px 15px; font-size: 14px;">Continue Course</a>`;
+            buttonHtml = `<a href="${courseUrl}" class="btn btn-primary" style="padding: 8px 15px; font-size: 14px;">${course.progress > 0 ? 'Continue Course' : 'Start Course'}</a>`;
         }
         
         const itemHtml = `
@@ -219,9 +232,6 @@ async function saveProfileData(user) {
     const domain = interestedDomain.value;
     let photoUrl = user.photoURL || '/images/no_image.png';
 
-    // Image upload logic is complex and relies on Firebase Storage, so we will skip actual file upload.
-    // If a new local image is selected, we update the preview but rely on the existing photoURL for persistence for now.
-
     const profileUpdate = {
         name: name,
         gender: gender,
@@ -288,8 +298,8 @@ auth.onAuthStateChanged(async (user) => {
         // --- User is signed in ---
         if(authButtons) authButtons.classList.add('hidden');
         if(userProfile) userProfile.classList.remove('hidden');
-        if(authButtonsMobile) authButtonsMobile.style.display = 'none'; // POINT 1
-        if(userProfileMobile) userProfileMobile.classList.remove('hidden'); // POINT 1
+        if(authButtonsMobile) authButtonsMobile.style.display = 'none';
+        if(userProfileMobile) userProfileMobile.classList.remove('hidden');
 
         // Check/Initialize user's data on first login
         await initializeUserData(user);
@@ -320,8 +330,8 @@ auth.onAuthStateChanged(async (user) => {
         // --- User is signed out or anonymous ---
         if(authButtons) authButtons.classList.remove('hidden');
         if(userProfile) userProfile.classList.add('hidden');
-        if(authButtonsMobile) authButtonsMobile.style.display = 'flex'; // POINT 1
-        if(userProfileMobile) userProfileMobile.classList.add('hidden'); // POINT 1
+        if(authButtonsMobile) authButtonsMobile.style.display = 'flex';
+        if(userProfileMobile) userProfileMobile.classList.add('hidden');
 
         // 3. Clear listeners when logged out
         if (courseUnsubscribe) { courseUnsubscribe(); courseUnsubscribe = null; }
@@ -339,39 +349,9 @@ auth.onAuthStateChanged(async (user) => {
         if(internshipsListContainer) internshipsListContainer.innerHTML = '<p class="text-center empty-state" style="padding: 20px 0;">Please log in to view your internship history.</p>';
     }
 
-    // 4. Handle full page access gate (Point 3)
-    const isProtectedPage = window.location.pathname.includes('/courses/course.html') || window.location.pathname.includes('/intern/internship.html');
-    const fullPageGate = document.getElementById('fullPageGate');
-    const mainContentArea = document.querySelector('.courses-grid') || document.querySelector('.courses-list') || document.querySelector('.courses');
+    // 4. Removed the redundant generic full page gate logic from script.js 
+    //    to prevent conflicts with course-specific logic.
 
-    if (isProtectedPage) {
-        if (user && !user.isAnonymous) {
-            if (fullPageGate) fullPageGate.classList.add('hidden');
-            if (mainContentArea) mainContentArea.style.display = 'grid'; 
-        } else {
-            if (!fullPageGate) {
-                // If gate hasn't been created by the other page's script, create it here (Fallback)
-                const container = document.querySelector('main .courses .container') || document.querySelector('main .value-prop .container');
-                if (container) {
-                    const gate = document.createElement('div');
-                    gate.id = 'fullPageGate';
-                    gate.innerHTML = `
-                         <div class="login-gate" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: var(--light); z-index: 10; display: flex; flex-direction: column; justify-content: center; align-items: center; padding: 40px; text-align: center; border-radius: 14px;">
-                           <i class="fas fa-lock" style="font-size: 4rem; color: var(--primary); margin-bottom: 30px;"></i>
-                            <h2 style="font-size: 2.2rem; color: var(--dark); margin-bottom: 20px;">Login Required to View This Content</h2>
-                           <p style="font-size: 1.2rem; color: var(--gray); max-width: 600px; margin-bottom: 30px;">Please sign in or create an account to view courses and apply for internships.</p>
-                           <button class="btn btn-primary" id="fullPageLoginButton" onclick="document.getElementById('loginBtnHeader').click()">Sign In Now</button>
-                          </div>
-                      `;
-                    container.style.position = 'relative';
-                    container.appendChild(gate);
-                }
-            } else {
-                fullPageGate.classList.remove('hidden');
-            }
-            if (mainContentArea) mainContentArea.style.display = 'none';
-        }
-    }
 });
 
 
@@ -425,16 +405,6 @@ const tabsContent = {
     internships: document.getElementById('internshipsTabContent'),
 };
 const searchInput = document.getElementById('searchInput');
-
-
-// Hardcoded data (used only for search/listings and lookup for progress rendering)
-const allCourses = [
-    { title: 'Essential Data Science Intern Course', instructor: 'Lucky Kumar', image: '/images/Essential Data Science Intern Course.png', url: "/courses/courses/Essential Data Science Intern Course.html" },
-    { title: 'Generative AI & Prompt Engineering', instructor: 'Lucky Kumar', image: '/images/Generative-AI-Prompt-Engineering-Masterclass.png', url: "/courses/courses/Generative-AI-Prompt-Engineering-Masterclass.html" },
-    { title: 'Ethical Hacking Mastery', instructor: 'Lucky Kumar', image: '/images/Ethical-Hacking-Mastery.png', url: "/courses/courses/Ethical-Hacking-Mastery.html" },
-    { title: 'Python Essentials for All', instructor: 'Lucky Kumar', image: '/images/Python-Essentials-for-All.png', url: "/courses/courses/Python-Essentials-for-All.html" },
-    { title: 'Cloud & DevOps Essentials', instructor: 'Lucky Kumar', image: '/images/Cloud-DevOps-Essentials.png', url: "/courses/courses/Cloud-DevOps-Essentials.html" }
-];
 
 
 // --- Helper Functions (Defined after global elements for scoping) ---
@@ -503,7 +473,12 @@ function updateProfileUI(profileData) {
 // Global function to show modal (used by course pages)
 window.showLoginModal = function() {
     if(authModal) authModal.classList.add('active');
-    if(loginSection) showSection(loginSection);
+    // Ensure the first visible section is the login section if logged out, or dashboard if logged in
+    if (auth.currentUser && !auth.currentUser.isAnonymous) {
+        if(dashboardSection) showSection(dashboardSection);
+    } else {
+        if(loginSection) showSection(loginSection);
+    }
     document.body.style.overflow = 'hidden';
 }
 
@@ -521,8 +496,7 @@ async function handleEmailLogin(e) {
     }
     try {
         await auth.signInWithEmailAndPassword(email, password);
-        if(authModal) authModal.classList.remove('active');
-        document.body.style.overflow = '';
+        // AuthStateChanged listener handles closing modal and redirecting to dashboard
     } catch (error) {
         let errorMessage = error.message;
         if (error.code === 'auth/wrong-password') {
@@ -560,8 +534,7 @@ async function handleEmailSignup(e) {
             interestedDomain: '',
             createdAt: firebase.firestore.FieldValue.serverTimestamp()
         }, { merge: true });
-        if(authModal) authModal.classList.remove('active'); 
-        document.body.style.overflow = '';
+        // AuthStateChanged listener handles closing modal and redirecting to dashboard
     } catch (error) {
         let errorMessage = error.message;
         if (error.code === 'auth/email-already-in-use') {
@@ -586,7 +559,7 @@ document.addEventListener('DOMContentLoaded', function() {
     if (showSignupLink) showSignupLink.addEventListener('click', (e) => { e.preventDefault(); if(signupSection) showSection(signupSection); });
     if (showLoginLink) showLoginLink.addEventListener('click', (e) => { e.preventDefault(); if(loginSection) showSection(loginSection); });
     
-    // --- Mobile Auth Button Logic (POINT 1) ---
+    // --- Mobile Auth Button Logic ---
     const loginBtnMobile = document.getElementById('loginBtnHeaderMobile');
     const signupBtnMobile = document.getElementById('signupBtnHeaderMobile');
     const profileBtnHeaderMobile = document.getElementById('profileBtnHeaderMobile');
@@ -607,8 +580,8 @@ document.addEventListener('DOMContentLoaded', function() {
     if (logoutBtnHeaderMobile) logoutBtnHeaderMobile.addEventListener('click', handleLogout);
     
     // --- Auth Actions ---
-    if (googleLoginBtn) googleLoginBtn.addEventListener('click', async () => { try { await auth.signInWithPopup(googleProvider); if(authModal) authModal.classList.remove('active'); document.body.style.overflow = ''; } catch (error) { if(loginError) showError(loginError, error.message); } });
-    if (googleSignupBtn) googleSignupBtn.addEventListener('click', async () => { try { await auth.signInWithPopup(googleProvider); if(authModal) authModal.classList.remove('active'); document.body.style.overflow = ''; } catch (error) { if(signupError) showError(signupError, error.message); } });
+    if (googleLoginBtn) googleLoginBtn.addEventListener('click', async () => { try { await auth.signInWithPopup(googleProvider); } catch (error) { if(loginError) showError(loginError, error.message); } });
+    if (googleSignupBtn) googleSignupBtn.addEventListener('click', async () => { try { await auth.signInWithPopup(googleProvider); } catch (error) { if(signupError) showError(signupError, error.message); } });
     if (emailLoginBtn) emailLoginBtn.addEventListener('click', handleEmailLogin);
     if (emailSignupBtn) emailSignupBtn.addEventListener('click', handleEmailSignup);
 
